@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Interactive Map</title>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+
+        #map {
+            height: 100%;
+        }
+
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chroma-js/2.1.1/chroma.min.js"></script>
+</head>
+<body>
+    <div id="controls">
+        <div>
+            <label for="STE_NAME21Select">STE NAME:</label>
+            <select id="STE_NAME21Select">
+                <option value="All">All</option>
+                <option value="New South Wales">New South Wales</option>
+                <option value="Victoria">Victoria</option>
+                <option value="Queensland">Queensland</option>
+                <option value="South Australia">South Australia</option>
+                <option value="Western Australia">Western Australia</option>
+                <option value="Northern Territory">Northern Territory</option>
+                <option value="Tasmania">Tasmania</option>
+                <!-- Add options for other STE_NAME21 values -->
+            </select>
+        </div>
+        <div>
+            <label for="csvSelect">CSV Data:</label>
+            <select id="csvSelect"></select>
+        </div>
+    </div>
+    <div id="map"></div>
+    <script>
+        var map = L.map('map').setView([-25.2744, 133.7751], 5);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+        }).addTo(map);
+
+        var polygonLayer;
+        var csvData;
+        var data;
+
+        $.getJSON('boundaries.json', function(jsonData) {
+            data = jsonData;
+
+            var csvSelect = document.getElementById('csvSelect');
+
+            fetch('data.csv')
+                .then(response => response.text())
+                .then(csv => {
+                    csvData = Papa.parse(csv, { header: true, dynamicTyping: true }).data;
+
+                    var columns = Object.keys(csvData[0]);
+                    columns.shift(); // Remove 'LGA_CODE21' from the list of columns
+
+                    columns.forEach(function(key) {
+                        var option = document.createElement('option');
+                        option.value = key;
+                        option.text = key;
+                        csvSelect.appendChild(option);
+                    });
+
+                    $('#STE_NAME21Select, #csvSelect').change(function () {
+                        updateMap();
+                    });
+
+                    updateMap();
+                });
+        });
+
+        function updateMap() {
+            var selectedSTE_NAME21 = document.getElementById('STE_NAME21Select').value;
+
+            if (!csvData) {
+                console.error('CSV data is not available');
+                return;
+            }
+
+            if (polygonLayer) {
+                map.removeLayer(polygonLayer);
+            }
+
+            var selectedCSVKey = document.getElementById('csvSelect').value;
+
+            var filteredData = data.features.filter(function(feature) {
+                return selectedSTE_NAME21 === "All" || feature.properties.STE_NAME21 === selectedSTE_NAME21;
+            });
+
+            var csvMapping = {};
+
+            csvData.forEach(function(row) {
+                var lgaCode21 = row.LGA_CODE21;
+                var csvValue = row[selectedCSVKey];
+
+                if (lgaCode21 !== null && lgaCode21 !== undefined && csvValue !== null && csvValue !== undefined) {
+                    csvMapping[lgaCode21.toString()] = csvValue;
+                }
+            });
+
+            var csvValues = Object.values(csvMapping).filter(value => value !== null && value !== undefined);
+
+            if (csvValues.length === 0) {
+                console.error('No data available for the selected CSV column and STE NAME.');
+                return;
+            }
+
+            var minCSVValue = Math.min(...csvValues);
+            var maxCSVValue = Math.max(...csvValues);
+
+            polygonLayer = L.geoJSON({
+                type: 'FeatureCollection',
+                features: filteredData
+            }, {
+                style: function(feature) {
+                    var lgaCode21 = feature.properties['LGA_CODE21'];
+                    var csvValue = csvMapping[lgaCode21];
+
+                    if (csvValue === null || csvValue === undefined) {
+                        return { fillColor: '#ccc', weight: 2, opacity: 1, color: 'white', fillOpacity: 0.9 };
+                    }
+
+                    var color = getColor(csvValue, minCSVValue, maxCSVValue);
+                    return { fillColor: color, weight: 2, opacity: 1, color: 'white', fillOpacity: 0.9 };
+                },
+                onEachFeature: function(feature, layer) {
+                    var lgaCode21 = feature.properties['LGA_CODE21'];
+                    var csvValue = csvMapping[lgaCode21];
+
+                    var popupContent = '<b>LGA Name:</b> ' + feature.properties.LGA_NAME21 + '<br>' +
+                        '<b>STE Name:</b> ' + feature.properties.STE_NAME21 + '<br>' +
+                        '<b>CSV Data:</b> ' + csvValue;
+
+                    layer.bindPopup(popupContent);
+                }
+            }).addTo(map);
+
+            if (selectedSTE_NAME21 !== "All") {
+                // Calculate the bounds only when STE_NAME filter is applied
+                var bounds = polygonLayer.getBounds();
+                map.fitBounds(bounds);
+            }
+        }
+
+        function getColor(value, min, max) {
+            // Use a color scale from light blue to dark red, with darker colors for higher values
+            var colorScale = chroma.scale(['lightblue', 'darkred']).domain([min, max]);
+            return colorScale(value).hex();
+        }
+    </script>
+</body>
+</html>
